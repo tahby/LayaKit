@@ -1,0 +1,8 @@
+.venv/
+models/
+reference/
+.build/
+*.mlmodelc/
+.DS_Store
+*.xcodeproj
+.swiftpm/

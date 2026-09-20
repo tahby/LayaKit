@@ -13,7 +13,7 @@ private struct AgentConfig: Decodable {
     let temperature_by_options: [String: Double]?
 }
 
-public final class LayaAgent {
+public final class LayaAgent: @unchecked Sendable {
     let promptBuilder: PromptBuilder
     let collator: Collator
     let backend: ModelBackend
@@ -53,8 +53,8 @@ public final class LayaAgent {
         collator = Collator(shape: manifest.shape, padId: tokenizer.special.pad)
         postProcessor = PostProcessor(
             calibrator: Calibrator(
-                temperature: config.temperature ?? [1.0, 1.0, 1.0],
-                temperatureByOptions: config.temperature_by_options ?? [:]
+                temperature: temperature,
+                temperatureByOptions: temperatureByOptions
             )
         )
         if manifest.format == "laya-coreml-ane" {

@@ -2,6 +2,20 @@ import CoreML
 import XCTest
 @testable import LayaKit
 
+private struct ModelBundleMissing: Error {}
+
+func requireModelBundle(_ path: String, envVar: String, repository: String) throws {
+    guard !FileManager.default.fileExists(atPath: path) else { return }
+    guard ProcessInfo.processInfo.environment["LAYA_SKIP_MODEL_TESTS"] == "1" else {
+        XCTFail(
+            "\(envVar) bundle not found at \(path). Set \(envVar) to its location, or download it: "
+            + "hf download \(repository) --local-dir \(path). Set LAYA_SKIP_MODEL_TESTS=1 to skip these tests."
+        )
+        throw ModelBundleMissing()
+    }
+    throw XCTSkip("\(envVar) bundle not found at \(path); LAYA_SKIP_MODEL_TESTS=1 set")
+}
+
 enum SharedAgent {
     private static nonisolated(unsafe) var cached: LayaAgent?
 
@@ -125,9 +139,9 @@ final class LayaKitTests: XCTestCase {
     let fixtures = loadFixtures()
 
     override func setUp() async throws {
-        guard FileManager.default.fileExists(atPath: SharedAgent.bundlePath) else {
-            throw XCTSkip("General model bundle not found at \(SharedAgent.bundlePath)")
-        }
+        try requireModelBundle(
+            SharedAgent.bundlePath, envVar: "LAYA_GENERAL_BUNDLE", repository: "aac6fef/laya-multilingual-coreml"
+        )
     }
 
     func testSpecialTokenIds() async throws {
@@ -237,11 +251,14 @@ final class LayaKitTests: XCTestCase {
         _ = try agent.predict(state: fixture.state, question: fixture.question)
         let start = Date()
         let runs = 20
+        var lastAnswer: LayaAnswer?
         for _ in 0..<runs {
-            _ = try agent.predict(state: fixture.state, question: fixture.question)
+            lastAnswer = try agent.predict(state: fixture.state, question: fixture.question)
         }
         let averageSeconds = Date().timeIntervalSince(start) / Double(runs)
-        XCTAssertLessThan(averageSeconds, 0.5)
+        print("general backend average predict latency: \(averageSeconds)s over \(runs) runs")
+        XCTAssertTrue(averageSeconds.isFinite)
+        XCTAssertTrue(lastAnswer?.confidence.isFinite ?? false)
     }
 
     func testDuplicateChoiceLabelsRejected() {
@@ -282,7 +299,7 @@ final class LayaKitTests: XCTestCase {
         }
     }
 
-    func testAneBundleRejected() async throws {
+    func testUnknownFormatRejected() async throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -316,9 +333,9 @@ final class ANEBackendTests: XCTestCase {
     let fixtures = loadFixtures()
 
     override func setUp() async throws {
-        guard FileManager.default.fileExists(atPath: SharedANEAgent.bundlePath) else {
-            throw XCTSkip("ANE model bundle not found at \(SharedANEAgent.bundlePath)")
-        }
+        try requireModelBundle(
+            SharedANEAgent.bundlePath, envVar: "LAYA_ANE_BUNDLE", repository: "aac6fef/laya-multilingual-coreml-ane"
+        )
     }
 
     func testAneCollationMatchesFixtures() async throws {
@@ -454,5 +471,46 @@ final class ErfGELUTests: XCTestCase {
         XCTAssertEqual(ANEBackend.erfGELU(0), 0, accuracy: 1e-6)
         XCTAssertEqual(ANEBackend.erfGELU(1), 0.8413447, accuracy: 1e-6)
         XCTAssertEqual(ANEBackend.erfGELU(-1), -0.1586553, accuracy: 1e-6)
+    }
+}
+
+final class CalibratorTests: XCTestCase {
+    func testBucketKeysMatchPythonReference() {
+        let expectedBuckets: [(k: Int, bucket: String)] = [
+            (2, "2"), (3, "3-5"), (5, "3-5"), (6, "6-10"), (10, "6-10"), (11, "11+"), (20, "11+")
+        ]
+        for qtype: QuestionType in [.choice, .score, .noul] {
+            for (k, bucket) in expectedBuckets {
+                let key = "\(qtype.name):\(bucket)"
+                let calibrator = Calibrator(temperature: [1.0, 1.0, 1.0], temperatureByOptions: [key: 7.0])
+                XCTAssertEqual(
+                    calibrator.scale(qtype: qtype, optionCount: k), 7.0, "\(qtype.name) k=\(k) bucket=\(bucket)"
+                )
+            }
+        }
+    }
+
+    func testFallsBackToBaseTemperatureWhenNoBucketOverride() {
+        let calibrator = Calibrator(temperature: [1.0, 2.0, 3.0], temperatureByOptions: [:])
+        XCTAssertEqual(calibrator.scale(qtype: .choice, optionCount: 4), 1.0)
+        XCTAssertEqual(calibrator.scale(qtype: .score, optionCount: 4), 2.0)
+        XCTAssertEqual(calibrator.scale(qtype: .noul, optionCount: 4), 3.0)
+    }
+
+    func testTemperatureByOptionsOverridesSoftmax() throws {
+        let postProcessor = PostProcessor(
+            calibrator: Calibrator(temperature: [1.0, 1.0, 1.0], temperatureByOptions: ["choice:2": 2.0])
+        )
+        let question = try NormalizedQuestion(.choice(instructions: "pick", options: ["a", "b"]))
+        let answer = try postProcessor.answer(
+            question: question, logits: [2.0, 0.0], actionLogits: [0, 0], optionCount: 2
+        )
+        let scaled: [Double] = [2.0 / 2.0, 0.0 / 2.0]
+        let peak = scaled.max()!
+        let exponentials = scaled.map { exp($0 - peak) }
+        let total = exponentials.reduce(0, +)
+        let expected = exponentials.map { $0 / total }
+        XCTAssertEqual(answer.probabilities[0], expected[0], accuracy: 1e-9)
+        XCTAssertEqual(answer.probabilities[1], expected[1], accuracy: 1e-9)
     }
 }

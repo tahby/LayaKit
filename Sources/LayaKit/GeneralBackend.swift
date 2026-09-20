@@ -5,11 +5,18 @@ final class GeneralBackend: ModelBackend {
     private let model: MLModel
 
     init(bundle: URL, shape: BundleShape, padId: Int) throws {
+        guard !shape.flexible || !(shape.lengths?.isEmpty ?? true) else {
+            throw LayaError.unsupportedBundle(
+                "RangeDim + CPU_AND_GPU failed local fidelity and repeatability checks. "
+                + "Re-export with the default enumerated shapes, or use a CPU-only backend."
+            )
+        }
+
         let package = bundle.appendingPathComponent("model.mlpackage")
         guard FileManager.default.fileExists(atPath: package.path) else {
             throw LayaError.missingFile(package.path)
         }
-        let compiled = try GeneralBackend.compiled(package: package, bundle: bundle)
+        let compiled = try CompiledModelCache.compiled(package: package, bundle: bundle)
         let configuration = MLModelConfiguration()
         configuration.computeUnits = .cpuAndGPU
         model = try MLModel(contentsOf: compiled, configuration: configuration)
@@ -31,25 +38,6 @@ final class GeneralBackend: ModelBackend {
         )
     }
 
-    private static func compiled(package: URL, bundle: URL) throws -> URL {
-        let destination = bundle.appendingPathComponent("model.mlmodelc")
-        let attributes = try? FileManager.default.attributesOfItem(atPath: destination.path)
-        guard let packageDate = try FileManager.default.attributesOfItem(atPath: package.path)[.modificationDate] as? Date else {
-            throw LayaError.unsupportedBundle(package.path)
-        }
-        if let compiledDate = attributes?[.modificationDate] as? Date, compiledDate >= packageDate {
-            return destination
-        }
-        let temporary = try MLModel.compileModel(at: package)
-        try? FileManager.default.removeItem(at: destination)
-        do {
-            try FileManager.default.moveItem(at: temporary, to: destination)
-            return destination
-        } catch {
-            return temporary
-        }
-    }
-
     func forward(_ batch: Batch) throws -> (logits: [Float], actionLogits: [Float]) {
         let features = try MLDictionaryFeatureProvider(dictionary: [
             "input_ids": array(batch.inputIds, shape: [1, batch.length]),
@@ -65,7 +53,7 @@ final class GeneralBackend: ModelBackend {
         guard let actionLogits = outputs.featureValue(for: "action_logits")?.multiArrayValue else {
             throw LayaError.unsupportedBundle("Model output is missing action_logits")
         }
-        return (floats(logits), floats(actionLogits))
+        return (modelOutputFloats(logits), modelOutputFloats(actionLogits))
     }
 
     private func array(_ values: [Int32], shape: [Int]) throws -> MLMultiArray {
@@ -76,9 +64,5 @@ final class GeneralBackend: ModelBackend {
             _ = buffer.update(fromContentsOf: values)
         }
         return result
-    }
-
-    private func floats(_ array: MLMultiArray) -> [Float] {
-        array.withUnsafeBufferPointer(ofType: Float.self) { Array($0) }
     }
 }

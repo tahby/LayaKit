@@ -4,4 +4,5 @@ public enum LayaError: Error {
     case invalidQuestion(String)
     case unsupportedBundle(String)
     case missingFile(String)
+    case invalidModelOutput(String)
 }

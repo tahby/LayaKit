@@ -21,6 +21,7 @@ final class ANEBackend: ModelBackend {
     private let windowRadius: Int
     private let length: Int
     private let maxOptions: Int
+    private let actionHiddenSize: Int
 
     init(bundle: URL, shape: BundleShape, padId: Int) throws {
         guard shape.batch_size == 1, shape.max_options == 32, !shape.flexible else {
@@ -31,7 +32,7 @@ final class ANEBackend: ModelBackend {
         guard FileManager.default.fileExists(atPath: package.path) else {
             throw LayaError.missingFile(package.path)
         }
-        let compiled = try ANEBackend.compiled(package: package, bundle: bundle)
+        let compiled = try CompiledModelCache.compiled(package: package, bundle: bundle)
         let configuration = MLModelConfiguration()
         configuration.computeUnits = .cpuAndNeuralEngine
         model = try MLModel(contentsOf: compiled, configuration: configuration)
@@ -57,9 +58,16 @@ final class ANEBackend: ModelBackend {
 
         try ANEBackend.validate(weights, name: "encoder.embeddings.tok_embeddings.weight", shape: [encoderConfig.vocab_size, hiddenSize])
         try ANEBackend.validate(weights, name: "type_emb.weight", shape: [3, hiddenSize])
-        try ANEBackend.validate(weights, name: "act_head.0.weight", shape: [256, hiddenSize + 4])
-        try ANEBackend.validate(weights, name: "act_head.0.bias", shape: [256])
-        try ANEBackend.validate(weights, name: "act_head.2.weight", shape: [2, 256])
+
+        let actionWeight0Entry = try weights.entry("act_head.0.weight")
+        guard actionWeight0Entry.shape.count == 2, actionWeight0Entry.shape[1] == hiddenSize + 4 else {
+            throw LayaError.unsupportedBundle(
+                "act_head.0.weight shape \(actionWeight0Entry.shape) does not match expected [*, \(hiddenSize + 4)]"
+            )
+        }
+        actionHiddenSize = actionWeight0Entry.shape[0]
+        try ANEBackend.validate(weights, name: "act_head.0.bias", shape: [actionHiddenSize])
+        try ANEBackend.validate(weights, name: "act_head.2.weight", shape: [2, actionHiddenSize])
         try ANEBackend.validate(weights, name: "act_head.2.bias", shape: [2])
 
         embeddingTable = try weights.float16Pointer("encoder.embeddings.tok_embeddings.weight")
@@ -110,25 +118,6 @@ final class ANEBackend: ModelBackend {
         }
     }
 
-    private static func compiled(package: URL, bundle: URL) throws -> URL {
-        let destination = bundle.appendingPathComponent("model.mlmodelc")
-        let attributes = try? FileManager.default.attributesOfItem(atPath: destination.path)
-        guard let packageDate = try FileManager.default.attributesOfItem(atPath: package.path)[.modificationDate] as? Date else {
-            throw LayaError.unsupportedBundle(package.path)
-        }
-        if let compiledDate = attributes?[.modificationDate] as? Date, compiledDate >= packageDate {
-            return destination
-        }
-        let temporary = try MLModel.compileModel(at: package)
-        try? FileManager.default.removeItem(at: destination)
-        do {
-            try FileManager.default.moveItem(at: temporary, to: destination)
-            return destination
-        } catch {
-            return temporary
-        }
-    }
-
     func forward(_ batch: Batch) throws -> (logits: [Float], actionLogits: [Float]) {
         let features = try MLDictionaryFeatureProvider(dictionary: [
             "embeddings": embeddingsArray(batch),
@@ -142,6 +131,9 @@ final class ANEBackend: ModelBackend {
         var pooledArray: MLMultiArray?
         for name in outputs.featureNames {
             guard let value = outputs.featureValue(for: name)?.multiArrayValue else { continue }
+            guard value.shape.count == 4 else {
+                throw LayaError.unsupportedBundle("ANE output \(name) has unexpected rank \(value.shape.count)")
+            }
             if value.shape[1] == 1 {
                 logitsArray = value
             } else {
@@ -152,8 +144,8 @@ final class ANEBackend: ModelBackend {
             throw LayaError.unsupportedBundle("Model output is missing logits or pooled state")
         }
 
-        var logits = floats(logitsArray)
-        let pooled = floats(pooledArray)
+        var logits = modelOutputFloats(logitsArray)
+        let pooled = modelOutputFloats(pooledArray)
         for index in 0..<maxOptions {
             if batch.markerMask[index] == 0 {
                 logits[index] = -1e4
@@ -176,8 +168,8 @@ final class ANEBackend: ModelBackend {
         let actionFeatures: [Float] = [top1, top1 - top2, entropy, k / 255.0]
         let actionInput = pooled + actionFeatures
 
-        var hidden = [Float](repeating: 0, count: 256)
-        for o in 0..<256 {
+        var hidden = [Float](repeating: 0, count: actionHiddenSize)
+        for o in 0..<actionHiddenSize {
             var value: Float = actionBias0[o]
             let base = o * actionInput.count
             for i in 0..<actionInput.count {
@@ -188,8 +180,8 @@ final class ANEBackend: ModelBackend {
         var action = [Float](repeating: 0, count: 2)
         for o in 0..<2 {
             var value: Float = actionBias2[o]
-            let base = o * 256
-            for i in 0..<256 {
+            let base = o * actionHiddenSize
+            for i in 0..<actionHiddenSize {
                 value += hidden[i] * actionWeight2[base + i]
             }
             action[o] = value
@@ -273,36 +265,5 @@ final class ANEBackend: ModelBackend {
             }
         }
         return result
-    }
-
-    private func floats(_ array: MLMultiArray) -> [Float] {
-        let shape = array.shape.map(\.intValue)
-        let strides = array.strides.map(\.intValue)
-        let a = shape[1]
-        let b = shape[3]
-        switch array.dataType {
-        case .float16:
-            return array.withUnsafeBufferPointer(ofType: Float16.self) { buffer in
-                var values = [Float](repeating: 0, count: a * b)
-                for i in 0..<a {
-                    for j in 0..<b {
-                        values[i * b + j] = Float(buffer[i * strides[1] + j * strides[3]])
-                    }
-                }
-                return values
-            }
-        case .float32:
-            return array.withUnsafeBufferPointer(ofType: Float.self) { buffer in
-                var values = [Float](repeating: 0, count: a * b)
-                for i in 0..<a {
-                    for j in 0..<b {
-                        values[i * b + j] = buffer[i * strides[1] + j * strides[3]]
-                    }
-                }
-                return values
-            }
-        default:
-            return (0..<array.count).map { array[$0].floatValue }
-        }
     }
 }

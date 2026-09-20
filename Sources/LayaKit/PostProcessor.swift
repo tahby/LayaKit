@@ -20,8 +20,8 @@ struct PostProcessor {
         actionLogits: [Float],
         optionCount k: Int
     ) throws -> LayaAnswer {
-        guard actionLogits.allSatisfy({ $0.isFinite }), logits.prefix(k).allSatisfy({ $0.isFinite }) else {
-            throw LayaError.unsupportedBundle("Non-finite Core ML outputs")
+        guard actionLogits.allSatisfy({ $0.isFinite }), logits.allSatisfy({ $0.isFinite }) else {
+            throw LayaError.invalidModelOutput("Non-finite Core ML outputs")
         }
         let act = softmax(actionLogits.map(Double.init))
         let scale = max(1e-3, calibrator.scale(qtype: question.type, optionCount: k))

@@ -14,6 +14,7 @@ indirect enum OrderedJSON {
     }
 
     var stringValue: String? { if case let .string(text) = self { return text } else { return nil } }
+    var boolValue: Bool? { if case let .bool(flag) = self { return flag } else { return nil } }
     var doubleValue: Double? { if case let .number(value) = self { return value } else { return nil } }
     var intValue: Int? { doubleValue.map(Int.init) }
     var arrayValue: [OrderedJSON]? { if case let .array(items) = self { return items } else { return nil } }

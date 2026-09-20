@@ -25,7 +25,7 @@ public final class LayaAgent {
             throw LayaError.missingFile(manifestURL.path)
         }
         let manifest = try JSONDecoder().decode(BundleManifest.self, from: manifestData)
-        guard manifest.format == "laya-coreml" else {
+        guard manifest.format == "laya-coreml" || manifest.format == "laya-coreml-ane" else {
             throw LayaError.unsupportedBundle(manifest.format)
         }
         guard manifest.format_version == 1 else {
@@ -57,11 +57,19 @@ public final class LayaAgent {
                 temperatureByOptions: config.temperature_by_options ?? [:]
             )
         )
-        backend = try GeneralBackend(
-            bundle: bundle,
-            shape: manifest.shape,
-            padId: tokenizer.special.pad
-        )
+        if manifest.format == "laya-coreml-ane" {
+            backend = try ANEBackend(
+                bundle: bundle,
+                shape: manifest.shape,
+                padId: tokenizer.special.pad
+            )
+        } else {
+            backend = try GeneralBackend(
+                bundle: bundle,
+                shape: manifest.shape,
+                padId: tokenizer.special.pad
+            )
+        }
     }
 
     public func predict(state: String, question: LayaQuestion) throws -> LayaAnswer {

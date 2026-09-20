@@ -1,0 +1,5 @@
+{
+  "type": "choice",
+  "instructions": "Who should handle this?",
+  "criteria": ["billing", "technical", "sales"]
+}

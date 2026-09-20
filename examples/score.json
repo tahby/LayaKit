@@ -1,0 +1,5 @@
+{
+  "type": "score",
+  "instructions": "How urgent is this issue?",
+  "criteria": ["not urgent", "somewhat urgent", "urgent", "critical"]
+}

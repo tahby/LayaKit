@@ -1,0 +1,5 @@
+{
+  "type": "noul",
+  "instructions": "Does this require a refund?",
+  "criteria": {"false": "no refund needed", "true": "refund required"}
+}

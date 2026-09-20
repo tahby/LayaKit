@@ -70,7 +70,7 @@ struct FixtureCase {
 
 func loadFixtures() -> (special: OrderedJSON, cases: [FixtureCase]) {
     let url = Bundle.module.url(forResource: "fixtures", withExtension: "json")!
-    let root = OrderedJSON.parse(try! Data(contentsOf: url))
+    let root = try! OrderedJSON.parse(try! Data(contentsOf: url))
     let cases = root["cases"]!.arrayValue!.map { item -> FixtureCase in
         let general = item["general"]!
         let ane = item["ane"]

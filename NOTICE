@@ -1,0 +1,20 @@
+LayaKit
+Copyright 2026 tahby
+
+This product is a Swift port of laya-coreml (Apache-2.0):
+https://github.com/mizorewww/laya-coreml
+Copyright 2026 laya-coreml contributors.
+Ported revision: 12b7501583c7f03a6b2e49ebe118a2c6302505b9
+Ported components: prompt construction, input collation, result calibration,
+and the Neural Engine host adapter (embedding gather, attention masks, action head).
+
+laya-coreml is itself adapted from Laya (Apache-2.0):
+https://github.com/NandhaKishorM/laya
+Copyright Convai Innovations and Laya contributors.
+and from laya-mlx (Apache-2.0):
+https://github.com/mizorewww/laya-mlx
+Copyright 2026 laya-mlx contributors.
+
+Model weights are downloaded separately and belong to their upstream authors.
+No weights are included in this repository. This is an independent project,
+not an official Convai Innovations or Apple release.

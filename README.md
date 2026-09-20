@@ -105,4 +105,4 @@ Tests read model bundles from `LAYA_GENERAL_BUNDLE` and `LAYA_ANE_BUNDLE` enviro
 
 ## License
 
-Adapted from [`mizorewww/laya-coreml`](https://github.com/mizorewww/laya-coreml), licensed under Apache-2.0. See `reference/LICENSE` and `reference/NOTICE` for upstream attribution.
+Apache-2.0. See `LICENSE`. Ported from [`mizorewww/laya-coreml`](https://github.com/mizorewww/laya-coreml) (Apache-2.0); upstream attribution is in `NOTICE`.
